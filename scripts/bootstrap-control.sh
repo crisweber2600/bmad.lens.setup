@@ -11,6 +11,9 @@ governance_branch_default="main"
 control_location=""
 control_dir_arg=""
 control_branch=""
+governance_repo_name=""
+governance_repo_owner=""
+is_new_control_repo=false
 release_url="$release_url_default"
 release_branch="$release_branch_default"
 copilot_url="$copilot_url_default"
@@ -36,6 +39,8 @@ Options:
   --copilot-branch <name>        Copilot branch (default: main).
   --governance-url <url>         Governance repo URL (default: crisweber2600/bmad.lens.governance).
   --governance-branch <name>     Governance branch (default: main).
+  --governance-repo-name <name>  Governance repo name for new control onboarding.
+  --governance-owner <owner>     Governance repo owner/org (default: control repo owner).
 
   --yes                          Non-interactive mode (accept defaults).
   --dry-run                      Print actions without changing files.
@@ -88,6 +93,84 @@ prompt_if_empty() {
     read -r -p "$prompt_text: " current_value
   fi
   printf -v "$var_name" '%s' "$current_value"
+}
+
+github_owner_from_url() {
+  local repo_url="$1"
+  local owner=""
+
+  if [[ "$repo_url" =~ ^https?://github\.com/([^/]+)/[^/]+(\.git)?$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+  elif [[ "$repo_url" =~ ^git@github\.com:([^/]+)/[^/]+(\.git)?$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+  fi
+
+  echo "$owner"
+}
+
+is_gh_ready() {
+  command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
+}
+
+ensure_governance_repo_for_new_control() {
+  local control_dir="$1"
+
+  local default_repo_name
+  default_repo_name="$(basename "$governance_url")"
+  default_repo_name="${default_repo_name%.git}"
+  prompt_if_empty governance_repo_name "Governance repo name" "$default_repo_name"
+
+  if [[ -z "$governance_repo_name" ]]; then
+    echo "ERROR: Governance repo name is required for new repo onboarding." >&2
+    exit 1
+  fi
+
+  if [[ -z "$governance_repo_owner" ]]; then
+    local origin_url
+    origin_url="$(git -C "$control_dir" remote get-url origin 2>/dev/null || true)"
+    governance_repo_owner="$(github_owner_from_url "$origin_url")"
+  fi
+
+  if [[ -z "$governance_repo_owner" ]]; then
+    governance_repo_owner="$(github_owner_from_url "$governance_url")"
+  fi
+
+  if [[ -z "$governance_repo_owner" ]]; then
+    echo "ERROR: Unable to determine governance repo owner. Pass --governance-owner." >&2
+    exit 1
+  fi
+
+  governance_url="https://github.com/$governance_repo_owner/$governance_repo_name.git"
+
+  if is_gh_ready; then
+    if gh api "repos/$governance_repo_owner/$governance_repo_name" >/dev/null 2>&1; then
+      echo "Using existing governance repo: $governance_repo_owner/$governance_repo_name"
+      return
+    fi
+
+    if $dry_run; then
+      echo "[dry-run] create private repo: $governance_repo_owner/$governance_repo_name"
+      return
+    fi
+
+    local current_user
+    current_user="$(gh api user -q .login 2>/dev/null || true)"
+    if [[ "$governance_repo_owner" == "$current_user" ]]; then
+      gh api -X POST user/repos -f name="$governance_repo_name" -F private=true -F auto_init=true >/dev/null
+    else
+      gh api -X POST "orgs/$governance_repo_owner/repos" -f name="$governance_repo_name" -F private=true -F auto_init=true >/dev/null
+    fi
+    echo "Created private governance repo: $governance_repo_owner/$governance_repo_name"
+    return
+  fi
+
+  if git ls-remote "$governance_url" HEAD >/dev/null 2>&1; then
+    echo "Using existing governance repo: $governance_repo_owner/$governance_repo_name"
+    return
+  fi
+
+  echo "ERROR: Governance repo '$governance_repo_owner/$governance_repo_name' does not exist, and gh auth is unavailable to create it." >&2
+  exit 1
 }
 
 ensure_repo_checkout() {
@@ -412,6 +495,14 @@ while [[ $# -gt 0 ]]; do
       governance_branch="${2:-}"
       shift 2
       ;;
+    --governance-repo-name)
+      governance_repo_name="${2:-}"
+      shift 2
+      ;;
+    --governance-owner)
+      governance_repo_owner="${2:-}"
+      shift 2
+      ;;
     --yes)
       assume_yes=true
       shift
@@ -456,6 +547,7 @@ if is_git_url "$control_location"; then
     run git -C "$control_dir" fetch --prune origin
     run git -C "$control_dir" pull --ff-only origin
   else
+    is_new_control_repo=true
     run mkdir -p "$(dirname "$control_dir")"
     run git clone "$control_location" "$control_dir"
   fi
@@ -499,6 +591,10 @@ fi
 
 release_dir="$control_dir/bmad.lens.release"
 governance_dir="$control_dir/TargetProjects/lens/lens-governance"
+
+if $is_new_control_repo; then
+  ensure_governance_repo_for_new_control "$control_dir"
+fi
 
 ensure_repo_checkout "release" "$release_dir" "$release_url" "$release_branch"
 ensure_repo_checkout "copilot" "$copilot_dir" "$copilot_url" "$copilot_branch"

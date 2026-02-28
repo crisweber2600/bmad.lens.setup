@@ -26,15 +26,43 @@ param(
   [Parameter(Mandatory = $false)]
   [string]$GovernanceBranch = "main",
 
+  [Parameter(Mandatory = $false)]
+  [string]$GovernanceRepoName,
+
+  [Parameter(Mandatory = $false)]
+  [string]$GovernanceOwner,
+
   [switch]$Yes,
   [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+$isNewControlRepo = $false
 
 function Test-IsGitUrl {
   param([string]$Value)
   return $Value -match '^(https://|http://|ssh://|git@)'
+}
+
+function Get-GitHubOwnerFromUrl {
+  param([string]$RepoUrl)
+
+  if ($RepoUrl -match '^https?://github\.com/([^/]+)/[^/]+(\.git)?$') {
+    return $Matches[1]
+  }
+
+  if ($RepoUrl -match '^git@github\.com:([^/]+)/[^/]+(\.git)?$') {
+    return $Matches[1]
+  }
+
+  return ''
+}
+
+function Test-GhReady {
+  $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
+  if (-not $ghCmd) { return $false }
+  gh auth status *> $null
+  return ($LASTEXITCODE -eq 0)
 }
 
 function Invoke-Step {
@@ -44,6 +72,73 @@ function Invoke-Step {
   } else {
     & $Script
   }
+}
+
+function Ensure-GovernanceRepoForNewControl {
+  param([string]$ControlRepo)
+
+  if (-not $GovernanceRepoName) {
+    $defaultName = [System.IO.Path]::GetFileNameWithoutExtension($GovernanceRepoUrl)
+    if ($Yes) {
+      $GovernanceRepoName = $defaultName
+    } else {
+      $entered = Read-Host "Governance repo name [$defaultName]"
+      $GovernanceRepoName = if ($entered) { $entered } else { $defaultName }
+    }
+  }
+
+  if (-not $GovernanceRepoName) {
+    throw 'Governance repo name is required for new repo onboarding.'
+  }
+
+  if (-not $GovernanceOwner) {
+    $originUrl = ''
+    try { $originUrl = (git -C $ControlRepo remote get-url origin 2>$null).Trim() } catch {}
+    $GovernanceOwner = Get-GitHubOwnerFromUrl $originUrl
+  }
+
+  if (-not $GovernanceOwner) {
+    $GovernanceOwner = Get-GitHubOwnerFromUrl $GovernanceRepoUrl
+  }
+
+  if (-not $GovernanceOwner) {
+    throw 'Unable to determine governance repo owner. Pass -GovernanceOwner.'
+  }
+
+  $script:GovernanceRepoUrl = "https://github.com/$GovernanceOwner/$GovernanceRepoName.git"
+
+  if (Test-GhReady) {
+    gh api "repos/$GovernanceOwner/$GovernanceRepoName" *> $null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "Using existing governance repo: $GovernanceOwner/$GovernanceRepoName"
+      return
+    }
+
+    if ($DryRun) {
+      Write-Host "[dry-run] create private repo: $GovernanceOwner/$GovernanceRepoName"
+      return
+    }
+
+    $currentUser = ''
+    try { $currentUser = (gh api user -q .login 2>$null).Trim() } catch {}
+
+    if ($GovernanceOwner -eq $currentUser) {
+      gh api -X POST user/repos -f name="$GovernanceRepoName" -F private=true -F auto_init=true | Out-Null
+    } else {
+      gh api -X POST "orgs/$GovernanceOwner/repos" -f name="$GovernanceRepoName" -F private=true -F auto_init=true | Out-Null
+    }
+
+    Write-Host "Created private governance repo: $GovernanceOwner/$GovernanceRepoName"
+    return
+  }
+
+  git ls-remote $GovernanceRepoUrl HEAD *> $null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "Using existing governance repo: $GovernanceOwner/$GovernanceRepoName"
+    return
+  }
+
+  throw "Governance repo '$GovernanceOwner/$GovernanceRepoName' does not exist, and gh auth is unavailable to create it."
 }
 
 function Get-RepoBranch {
@@ -370,6 +465,7 @@ if (Test-IsGitUrl $ControlLocation) {
     Invoke-Step -Preview "git -C $controlRepo pull --ff-only origin" -Script { git -C $controlRepo pull --ff-only origin | Out-Null }
   }
   else {
+    $isNewControlRepo = $true
     Invoke-Step -Preview "create directory $(Split-Path -Parent $controlRepo)" -Script { New-Item -ItemType Directory -Path (Split-Path -Parent $controlRepo) -Force | Out-Null }
     Invoke-Step -Preview "git clone $ControlLocation $controlRepo" -Script { git clone $ControlLocation $controlRepo | Out-Null }
   }
@@ -423,6 +519,10 @@ elseif ((Test-Path $legacyDir) -and ($legacyDir -ne $copilotDir)) {
 
 $releaseDir = Join-Path $controlRepo 'bmad.lens.release'
 $governanceDir = Join-Path $controlRepo 'TargetProjects/lens/lens-governance'
+
+if ($isNewControlRepo) {
+  Ensure-GovernanceRepoForNewControl -ControlRepo $controlRepo
+}
 
 Ensure-RepoCheckout -Label 'release' -Path $releaseDir -RepoUrl $ReleaseRepoUrl -Branch $ReleaseBranch
 Ensure-RepoCheckout -Label 'copilot' -Path $copilotDir -RepoUrl $CopilotRepoUrl -Branch $CopilotBranch

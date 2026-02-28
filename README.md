@@ -24,6 +24,8 @@ Both scripts:
 - normalize remotes when folders already exist,
 - migrate legacy `controlRepo/.gihub` to `controlRepo/.github` when present,
 - ensure control `.gitignore` includes external-repo exclusions,
+- when onboarding a brand-new control repo, ask for governance repo name and use it (owner defaults from control repo owner),
+- clone the governance repo if it exists, or create it as private (via authenticated GitHub CLI) when missing,
 - write `_bmad-output/lens-work/external-repos.yaml` state,
 - generate `scripts/onboard-workspace.sh` and `scripts/onboard-workspace.ps1` inside the target control repo,
 - commit and push those onboarding files to the target control repo branch.
@@ -71,4 +73,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-control.
 - For existing folders, the script requires them to already be git repos (`.git` present).
 - If an expected branch is missing on origin, bootstrap fails fast.
 - Use `--dry-run` / `-DryRun` to preview actions.
+- For new control repo onboarding, pass `--governance-repo-name` / `-GovernanceRepoName` to avoid prompts.
+- Private governance repo auto-create requires authenticated `gh` CLI access.
 - New joiners can clone the control repo and run `scripts/onboard-workspace.sh` or `scripts/onboard-workspace.ps1` to set up external repos locally.
