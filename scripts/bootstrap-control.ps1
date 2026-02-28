@@ -12,19 +12,23 @@ param(
   [string]$ReleaseRepoUrl = "https://github.com/crisweber2600/bmad.lens.release.git",
 
   [Parameter(Mandatory = $false)]
-  [string]$ReleaseBranch = "release/2.0.0",
+  [string]$ReleaseBranch = "",
 
   [Parameter(Mandatory = $false)]
   [string]$CopilotRepoUrl = "https://github.com/crisweber2600/bmad.lens.copilot.git",
 
   [Parameter(Mandatory = $false)]
-  [string]$CopilotBranch = "main",
+  [string]$CopilotBranch = "",
 
   [Parameter(Mandatory = $false)]
   [string]$GovernanceRepoUrl = "https://github.com/crisweber2600/bmad.lens.governance.git",
 
   [Parameter(Mandatory = $false)]
-  [string]$GovernanceBranch = "main",
+  [string]$GovernanceBranch = "",
+
+  [Parameter(Mandatory = $false)]
+  [ValidateSet('stable', 'beta')]
+  [string]$Mode = "stable",
 
   [Parameter(Mandatory = $false)]
   [string]$GovernanceRepoName,
@@ -63,6 +67,47 @@ function Test-GhReady {
   if (-not $ghCmd) { return $false }
   gh auth status *> $null
   return ($LASTEXITCODE -eq 0)
+}
+
+function Resolve-ModeBranchInRepo {
+  param(
+    [string]$Path,
+    [string]$ModeName,
+    [string]$Label
+  )
+
+  $branch = ''
+  if ($ModeName -eq 'stable') {
+    $headRef = (git -C $Path symbolic-ref --short refs/remotes/origin/HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $headRef) {
+      $branch = $headRef.Trim() -replace '^origin/', ''
+    }
+
+    if (-not $branch -or $branch -eq 'HEAD' -or $branch -eq '(unknown)') {
+      $originInfo = git -C $Path remote show origin 2>$null
+      $headLine = $originInfo | Select-String -Pattern 'HEAD branch:' | Select-Object -First 1
+      if ($headLine) {
+        $branch = ($headLine.ToString() -replace '.*HEAD branch:\s*', '').Trim()
+      }
+    }
+  }
+  else {
+    $refs = git -C $Path for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes/origin 2>$null
+    foreach ($ref in $refs) {
+      $candidate = $ref.Trim()
+      if ($candidate -eq 'origin/HEAD') { continue }
+      if ($candidate.StartsWith('origin/')) {
+        $branch = $candidate.Substring(7)
+        break
+      }
+    }
+  }
+
+  if (-not $branch -or $branch -eq '(unknown)') {
+    throw "Unable to resolve $Label branch for mode '$ModeName'."
+  }
+
+  return $branch
 }
 
 function Invoke-Step {
@@ -160,7 +205,8 @@ function Ensure-RepoCheckout {
     [string]$Label,
     [string]$Path,
     [string]$RepoUrl,
-    [string]$Branch
+    [string]$Branch,
+    [string]$ModeName
   )
 
   if ((Test-Path $Path) -and -not (Test-Path (Join-Path $Path '.git'))) {
@@ -177,13 +223,20 @@ function Ensure-RepoCheckout {
     Invoke-Step -Preview "git -C $Path fetch --prune origin" -Script { git -C $Path fetch --prune origin | Out-Null }
   }
 
-  git -C $Path ls-remote --exit-code --heads origin $Branch | Out-Null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Branch '$Branch' not found on '$RepoUrl' for $Label"
+  $resolvedBranch = $Branch
+  if ([string]::IsNullOrWhiteSpace($resolvedBranch)) {
+    $resolvedBranch = Resolve-ModeBranchInRepo -Path $Path -ModeName $ModeName -Label $Label
   }
 
-  Invoke-Step -Preview "git -C $Path checkout -B $Branch origin/$Branch" -Script { git -C $Path checkout -B $Branch "origin/$Branch" | Out-Null }
-  Invoke-Step -Preview "git -C $Path pull --ff-only origin $Branch" -Script { git -C $Path pull --ff-only origin $Branch | Out-Null }
+  git -C $Path ls-remote --exit-code --heads origin $resolvedBranch | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Branch '$resolvedBranch' not found on '$RepoUrl' for $Label"
+  }
+
+  Invoke-Step -Preview "git -C $Path checkout -B $resolvedBranch origin/$resolvedBranch" -Script { git -C $Path checkout -B $resolvedBranch "origin/$resolvedBranch" | Out-Null }
+  Invoke-Step -Preview "git -C $Path pull --ff-only origin $resolvedBranch" -Script { git -C $Path pull --ff-only origin $resolvedBranch | Out-Null }
+
+  return $resolvedBranch
 }
 
 function Ensure-ControlGitIgnore {
@@ -259,6 +312,7 @@ copilot_url_default="__COPILOT_URL__"
 copilot_branch_default="__COPILOT_BRANCH__"
 governance_url_default="__GOVERNANCE_URL__"
 governance_branch_default="__GOVERNANCE_BRANCH__"
+mode_default="__MODE__"
 
 if [[ -d "$setup_dir/.git" ]]; then
   git -C "$setup_dir" remote set-url origin "$setup_repo_url"
@@ -283,13 +337,18 @@ bash "$setup_dir/scripts/bootstrap-control.sh" \
   --copilot-branch "$copilot_branch_default" \
   --governance-url "$governance_url_default" \
   --governance-branch "$governance_branch_default" \
+  --mode "$mode_default" \
   "$@"
 '@
 
   $psTemplate = @'
 param(
   [string]$SetupRepoUrl = "https://github.com/crisweber2600/bmad.lens.setup.git",
-  [string]$SetupBranch = "main"
+  [string]$SetupBranch = "main",
+  [ValidateSet('stable','beta')]
+  [string]$Mode = "__MODE__",
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$ForwardArgs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -330,11 +389,13 @@ $bootstrapScript = Join-Path $setupDir 'scripts/bootstrap-control.ps1'
   -CopilotRepoUrl $copilotUrl `
   -CopilotBranch $copilotBranch `
   -GovernanceRepoUrl $governanceUrl `
-  -GovernanceBranch $governanceBranch
+  -GovernanceBranch $governanceBranch `
+  -Mode $Mode `
+  @ForwardArgs
 '@
 
-  $shContent = $shTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch)
-  $psContent = $psTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch)
+  $shContent = $shTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch).Replace('__MODE__', $Mode)
+  $psContent = $psTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch).Replace('__MODE__', $Mode)
 
   Set-Content -Path $onboardSh -Value $shContent -NoNewline
   Set-Content -Path $onboardPs1 -Value $psContent -NoNewline
@@ -507,6 +568,11 @@ if ($ControlBranch) {
     Invoke-Step -Preview "git -C $controlRepo checkout $ControlBranch" -Script { git -C $controlRepo checkout $ControlBranch | Out-Null }
   }
 }
+elseif ((git -C $controlRepo remote get-url origin 2>$null)) {
+  Invoke-Step -Preview "git -C $controlRepo fetch --prune origin" -Script { git -C $controlRepo fetch --prune origin | Out-Null }
+  $ControlBranch = Resolve-ModeBranchInRepo -Path $controlRepo -ModeName $Mode -Label 'control'
+  Invoke-Step -Preview "git -C $controlRepo checkout -B $ControlBranch origin/$ControlBranch" -Script { git -C $controlRepo checkout -B $ControlBranch "origin/$ControlBranch" | Out-Null }
+}
 
 $legacyDir = Join-Path $controlRepo '.gihub'
 $copilotDir = Join-Path $controlRepo '.github'
@@ -524,9 +590,9 @@ if ($isNewControlRepo) {
   Ensure-GovernanceRepoForNewControl -ControlRepo $controlRepo
 }
 
-Ensure-RepoCheckout -Label 'release' -Path $releaseDir -RepoUrl $ReleaseRepoUrl -Branch $ReleaseBranch
-Ensure-RepoCheckout -Label 'copilot' -Path $copilotDir -RepoUrl $CopilotRepoUrl -Branch $CopilotBranch
-Ensure-RepoCheckout -Label 'governance' -Path $governanceDir -RepoUrl $GovernanceRepoUrl -Branch $GovernanceBranch
+$ReleaseBranch = Ensure-RepoCheckout -Label 'release' -Path $releaseDir -RepoUrl $ReleaseRepoUrl -Branch $ReleaseBranch -ModeName $Mode
+$CopilotBranch = Ensure-RepoCheckout -Label 'copilot' -Path $copilotDir -RepoUrl $CopilotRepoUrl -Branch $CopilotBranch -ModeName $Mode
+$GovernanceBranch = Ensure-RepoCheckout -Label 'governance' -Path $governanceDir -RepoUrl $GovernanceRepoUrl -Branch $GovernanceBranch -ModeName $Mode
 
 Ensure-ControlGitIgnore -ControlRepo $controlRepo
 Write-StateFile -ControlRepo $controlRepo -ReleasePath $releaseDir -CopilotPath $copilotDir -GovernancePath $governanceDir

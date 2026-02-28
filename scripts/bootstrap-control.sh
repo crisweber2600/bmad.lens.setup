@@ -2,11 +2,11 @@
 set -euo pipefail
 
 release_url_default="https://github.com/crisweber2600/bmad.lens.release.git"
-release_branch_default="release/2.0.0"
+release_branch_default=""
 copilot_url_default="https://github.com/crisweber2600/bmad.lens.copilot.git"
-copilot_branch_default="main"
+copilot_branch_default=""
 governance_url_default="https://github.com/crisweber2600/bmad.lens.governance.git"
-governance_branch_default="main"
+governance_branch_default=""
 
 control_location=""
 control_dir_arg=""
@@ -14,6 +14,7 @@ control_branch=""
 governance_repo_name=""
 governance_repo_owner=""
 is_new_control_repo=false
+mode="stable"
 release_url="$release_url_default"
 release_branch="$release_branch_default"
 copilot_url="$copilot_url_default"
@@ -34,11 +35,12 @@ Options:
   --control-branch <name>        Optional control repo branch to enforce.
 
   --release-url <url>            Release repo URL (default: crisweber2600/bmad.lens.release).
-  --release-branch <name>        Release branch (default: release/2.0.0).
+  --release-branch <name>        Release branch (default: resolved by --mode).
   --copilot-url <url>            Copilot repo URL (default: crisweber2600/bmad.lens.copilot).
-  --copilot-branch <name>        Copilot branch (default: main).
+  --copilot-branch <name>        Copilot branch (default: resolved by --mode).
   --governance-url <url>         Governance repo URL (default: crisweber2600/bmad.lens.governance).
-  --governance-branch <name>     Governance branch (default: main).
+  --governance-branch <name>     Governance branch (default: resolved by --mode).
+  --mode <stable|beta>           Branch resolution mode when branch args are omitted.
   --governance-repo-name <name>  Governance repo name for new control onboarding.
   --governance-owner <owner>     Governance repo owner/org (default: control repo owner).
 
@@ -112,6 +114,31 @@ is_gh_ready() {
   command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
 }
 
+resolve_mode_branch_in_repo() {
+  local dir="$1"
+  local mode_name="$2"
+  local label="$3"
+  local branch=""
+
+  if [[ "$mode_name" == "stable" ]]; then
+    branch="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    branch="${branch#origin/}"
+
+    if [[ -z "$branch" || "$branch" == "HEAD" || "$branch" == "(unknown)" ]]; then
+      branch="$(git -C "$dir" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -n1)"
+    fi
+  else
+    branch="$(git -C "$dir" for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed -n 's#^origin/##p' | grep -v '^HEAD$' | head -n1)"
+  fi
+
+  if [[ -z "$branch" || "$branch" == "(unknown)" ]]; then
+    echo "ERROR: Unable to resolve $label branch for mode '$mode_name'." >&2
+    exit 1
+  fi
+
+  echo "$branch"
+}
+
 ensure_governance_repo_for_new_control() {
   local control_dir="$1"
 
@@ -178,6 +205,8 @@ ensure_repo_checkout() {
   local dir="$2"
   local url="$3"
   local branch="$4"
+  local mode_name="$5"
+  local out_var="$6"
 
   if [[ -e "$dir" && ! -d "$dir/.git" ]]; then
     echo "ERROR: $label path exists but is not a git repository: $dir" >&2
@@ -193,13 +222,20 @@ ensure_repo_checkout() {
     run git -C "$dir" fetch --prune origin
   fi
 
-  if ! git -C "$dir" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-    echo "ERROR: Branch '$branch' not found on '$url' for $label" >&2
+  local resolved_branch="$branch"
+  if [[ -z "$resolved_branch" ]]; then
+    resolved_branch="$(resolve_mode_branch_in_repo "$dir" "$mode_name" "$label")"
+  fi
+
+  if ! git -C "$dir" ls-remote --exit-code --heads origin "$resolved_branch" >/dev/null 2>&1; then
+    echo "ERROR: Branch '$resolved_branch' not found on '$url' for $label" >&2
     exit 1
   fi
 
-  run git -C "$dir" checkout -B "$branch" "origin/$branch"
-  run git -C "$dir" pull --ff-only origin "$branch"
+  run git -C "$dir" checkout -B "$resolved_branch" "origin/$resolved_branch"
+  run git -C "$dir" pull --ff-only origin "$resolved_branch"
+
+  printf -v "$out_var" '%s' "$resolved_branch"
 }
 
 ensure_control_gitignore() {
@@ -274,6 +310,7 @@ copilot_url_default="__COPILOT_URL__"
 copilot_branch_default="__COPILOT_BRANCH__"
 governance_url_default="__GOVERNANCE_URL__"
 governance_branch_default="__GOVERNANCE_BRANCH__"
+mode_default="__MODE__"
 
 if [[ -d "$setup_dir/.git" ]]; then
   git -C "$setup_dir" remote set-url origin "$setup_repo_url"
@@ -298,13 +335,18 @@ bash "$setup_dir/scripts/bootstrap-control.sh" \
   --copilot-branch "$copilot_branch_default" \
   --governance-url "$governance_url_default" \
   --governance-branch "$governance_branch_default" \
+  --mode "$mode_default" \
   "$@"
 EOF
 
   cat > "$onboard_ps1" <<'EOF'
 param(
   [string]$SetupRepoUrl = "https://github.com/crisweber2600/bmad.lens.setup.git",
-  [string]$SetupBranch = "main"
+  [string]$SetupBranch = "main",
+  [ValidateSet('stable','beta')]
+  [string]$Mode = "__MODE__",
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$ForwardArgs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -345,7 +387,9 @@ $bootstrapScript = Join-Path $setupDir 'scripts/bootstrap-control.ps1'
   -CopilotRepoUrl $copilotUrl `
   -CopilotBranch $copilotBranch `
   -GovernanceRepoUrl $governanceUrl `
-  -GovernanceBranch $governanceBranch
+  -GovernanceBranch $governanceBranch `
+  -Mode $Mode `
+  @ForwardArgs
 EOF
 
   local release_url_esc
@@ -354,6 +398,7 @@ EOF
   local copilot_branch_esc
   local governance_url_esc
   local governance_branch_esc
+  local mode_esc
 
   release_url_esc="$(esc_sed_replacement "$release_url")"
   release_branch_esc="$(esc_sed_replacement "$release_branch")"
@@ -361,6 +406,7 @@ EOF
   copilot_branch_esc="$(esc_sed_replacement "$copilot_branch")"
   governance_url_esc="$(esc_sed_replacement "$governance_url")"
   governance_branch_esc="$(esc_sed_replacement "$governance_branch")"
+  mode_esc="$(esc_sed_replacement "$mode")"
 
   sed -i \
     -e "s|__RELEASE_URL__|$release_url_esc|g" \
@@ -369,6 +415,7 @@ EOF
     -e "s|__COPILOT_BRANCH__|$copilot_branch_esc|g" \
     -e "s|__GOVERNANCE_URL__|$governance_url_esc|g" \
     -e "s|__GOVERNANCE_BRANCH__|$governance_branch_esc|g" \
+    -e "s|__MODE__|$mode_esc|g" \
     "$onboard_sh" "$onboard_ps1"
 
   chmod +x "$onboard_sh"
@@ -503,6 +550,10 @@ while [[ $# -gt 0 ]]; do
       governance_repo_owner="${2:-}"
       shift 2
       ;;
+    --mode)
+      mode="${2:-}"
+      shift 2
+      ;;
     --yes)
       assume_yes=true
       shift
@@ -522,6 +573,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$mode" != "stable" && "$mode" != "beta" ]]; then
+  echo "ERROR: --mode must be 'stable' or 'beta'." >&2
+  exit 1
+fi
 
 prompt_if_empty control_location "Control repo path or URL"
 if [[ -z "$control_location" ]]; then
@@ -581,6 +637,12 @@ if [[ -n "$control_branch" ]]; then
   fi
 fi
 
+if [[ -z "$control_branch" ]] && git -C "$control_dir" remote get-url origin >/dev/null 2>&1; then
+  run git -C "$control_dir" fetch --prune origin
+  control_branch="$(resolve_mode_branch_in_repo "$control_dir" "$mode" "control")"
+  run git -C "$control_dir" checkout -B "$control_branch" "origin/$control_branch"
+fi
+
 legacy_dir="$control_dir/.gihub"
 copilot_dir="$control_dir/.github"
 if [[ -d "$legacy_dir/.git" && ! -e "$copilot_dir" ]]; then
@@ -596,9 +658,9 @@ if $is_new_control_repo; then
   ensure_governance_repo_for_new_control "$control_dir"
 fi
 
-ensure_repo_checkout "release" "$release_dir" "$release_url" "$release_branch"
-ensure_repo_checkout "copilot" "$copilot_dir" "$copilot_url" "$copilot_branch"
-ensure_repo_checkout "governance" "$governance_dir" "$governance_url" "$governance_branch"
+ensure_repo_checkout "release" "$release_dir" "$release_url" "$release_branch" "$mode" release_branch
+ensure_repo_checkout "copilot" "$copilot_dir" "$copilot_url" "$copilot_branch" "$mode" copilot_branch
+ensure_repo_checkout "governance" "$governance_dir" "$governance_url" "$governance_branch" "$mode" governance_branch
 
 ensure_control_gitignore "$control_dir"
 write_state_file "$control_dir" "$release_dir" "$copilot_dir" "$governance_dir"

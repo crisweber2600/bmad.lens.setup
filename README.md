@@ -21,6 +21,7 @@ Both scripts:
 - prompt for control repo location when not provided,
 - clone or update the external repos,
 - verify expected branches exist remotely and check them out,
+- resolve branches by mode when branch args are omitted (`stable` = default branch, `beta` = latest commit branch),
 - normalize remotes when folders already exist,
 - migrate legacy `controlRepo/.gihub` to `controlRepo/.github` when present,
 - ensure control `.gitignore` includes external-repo exclusions,
@@ -32,9 +33,10 @@ Both scripts:
 
 ## Defaults
 
-- Release repo: `https://github.com/crisweber2600/bmad.lens.release.git` @ `release/2.0.0`
-- Copilot repo: `https://github.com/crisweber2600/bmad.lens.copilot.git` @ `main`
-- Governance repo: `https://github.com/crisweber2600/bmad.lens.governance.git` @ `main`
+- Mode: `stable`
+- Release repo: `https://github.com/crisweber2600/bmad.lens.release.git`
+- Copilot repo: `https://github.com/crisweber2600/bmad.lens.copilot.git`
+- Governance repo: `https://github.com/crisweber2600/bmad.lens.governance.git`
 
 ## Usage
 
@@ -50,6 +52,7 @@ bash scripts/bootstrap-control.sh \
 bash scripts/bootstrap-control.sh \
   --control "https://github.com/crisweber2600/NorthStarET.BMAD.git" \
   --control-dir "/d/NorthStarET.BMAD" \
+  --mode beta \
   --control-branch northstar
 ```
 
@@ -65,6 +68,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-control.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-control.ps1 `
   -ControlLocation "https://github.com/crisweber2600/NorthStarET.BMAD.git" `
   -ControlDirectory "D:\NorthStarET.BMAD" `
+  -Mode "beta" `
   -ControlBranch "northstar"
 ```
 
@@ -73,6 +77,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-control.
 - For existing folders, the script requires them to already be git repos (`.git` present).
 - If an expected branch is missing on origin, bootstrap fails fast.
 - Use `--dry-run` / `-DryRun` to preview actions.
+- Use `--mode stable|beta` (`-Mode stable|beta`) when you want automatic branch selection.
 - For new control repo onboarding, pass `--governance-repo-name` / `-GovernanceRepoName` to avoid prompts.
 - Private governance repo auto-create requires authenticated `gh` CLI access.
 - New joiners can clone the control repo and run `scripts/onboard-workspace.sh` or `scripts/onboard-workspace.ps1` to set up external repos locally.
