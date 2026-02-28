@@ -28,7 +28,7 @@ Both scripts:
 
 ## Defaults
 
-- Release repo: `https://github.com/crisweber2600/bmad.lens.release.git` @ `5.0`
+- Release repo: `https://github.com/crisweber2600/bmad.lens.release.git` @ `release/2.0.0`
 - Copilot repo: `https://github.com/crisweber2600/bmad.lens.copilot.git` @ `main`
 - Governance repo: `https://github.com/crisweber2600/bmad.lens.governance.git` @ `main`
 
