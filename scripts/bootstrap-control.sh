@@ -151,6 +151,176 @@ ensure_control_gitignore() {
   done
 }
 
+esc_sed_replacement() {
+  printf '%s' "$1" | sed 's/[|&]/\\&/g'
+}
+
+write_self_onboarding_scripts() {
+  local control_dir="$1"
+  local scripts_dir="$control_dir/scripts"
+  local onboard_sh="$scripts_dir/onboard-workspace.sh"
+  local onboard_ps1="$scripts_dir/onboard-workspace.ps1"
+
+  if $dry_run; then
+    echo "[dry-run] write $onboard_sh"
+    echo "[dry-run] write $onboard_ps1"
+    return
+  fi
+
+  mkdir -p "$scripts_dir"
+
+  cat > "$onboard_sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+control_dir="$(cd "$(dirname "$0")/.." && pwd)"
+setup_repo_url="https://github.com/crisweber2600/bmad.lens.setup.git"
+setup_branch="main"
+setup_dir="${TMPDIR:-/tmp}/bmad.lens.setup"
+
+release_url_default="__RELEASE_URL__"
+release_branch_default="__RELEASE_BRANCH__"
+copilot_url_default="__COPILOT_URL__"
+copilot_branch_default="__COPILOT_BRANCH__"
+governance_url_default="__GOVERNANCE_URL__"
+governance_branch_default="__GOVERNANCE_BRANCH__"
+
+if [[ -d "$setup_dir/.git" ]]; then
+  git -C "$setup_dir" remote set-url origin "$setup_repo_url"
+  git -C "$setup_dir" fetch --prune origin
+  if git -C "$setup_dir" ls-remote --exit-code --heads origin "$setup_branch" >/dev/null 2>&1; then
+    git -C "$setup_dir" checkout -B "$setup_branch" "origin/$setup_branch"
+    git -C "$setup_dir" pull --ff-only origin "$setup_branch"
+  fi
+else
+  rm -rf "$setup_dir"
+  git clone "$setup_repo_url" "$setup_dir"
+  if git -C "$setup_dir" ls-remote --exit-code --heads origin "$setup_branch" >/dev/null 2>&1; then
+    git -C "$setup_dir" checkout -B "$setup_branch" "origin/$setup_branch"
+  fi
+fi
+
+bash "$setup_dir/scripts/bootstrap-control.sh" \
+  --control "$control_dir" \
+  --release-url "$release_url_default" \
+  --release-branch "$release_branch_default" \
+  --copilot-url "$copilot_url_default" \
+  --copilot-branch "$copilot_branch_default" \
+  --governance-url "$governance_url_default" \
+  --governance-branch "$governance_branch_default" \
+  "$@"
+EOF
+
+  cat > "$onboard_ps1" <<'EOF'
+param(
+  [string]$SetupRepoUrl = "https://github.com/crisweber2600/bmad.lens.setup.git",
+  [string]$SetupBranch = "main"
+)
+
+$ErrorActionPreference = 'Stop'
+
+$controlRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$setupDir = Join-Path ([System.IO.Path]::GetTempPath()) "bmad.lens.setup"
+
+$releaseUrl = "__RELEASE_URL__"
+$releaseBranch = "__RELEASE_BRANCH__"
+$copilotUrl = "__COPILOT_URL__"
+$copilotBranch = "__COPILOT_BRANCH__"
+$governanceUrl = "__GOVERNANCE_URL__"
+$governanceBranch = "__GOVERNANCE_BRANCH__"
+
+if (Test-Path (Join-Path $setupDir '.git')) {
+  git -C $setupDir remote set-url origin $SetupRepoUrl | Out-Null
+  git -C $setupDir fetch --prune origin | Out-Null
+  try {
+    git -C $setupDir ls-remote --exit-code --heads origin $SetupBranch | Out-Null
+    git -C $setupDir checkout -B $SetupBranch "origin/$SetupBranch" | Out-Null
+    git -C $setupDir pull --ff-only origin $SetupBranch | Out-Null
+  } catch {}
+}
+else {
+  if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
+  git clone $SetupRepoUrl $setupDir | Out-Null
+  try {
+    git -C $setupDir ls-remote --exit-code --heads origin $SetupBranch | Out-Null
+    git -C $setupDir checkout -B $SetupBranch "origin/$SetupBranch" | Out-Null
+  } catch {}
+}
+
+$bootstrapScript = Join-Path $setupDir 'scripts/bootstrap-control.ps1'
+& $bootstrapScript \
+  -ControlLocation $controlRepo \
+  -ReleaseRepoUrl $releaseUrl \
+  -ReleaseBranch $releaseBranch \
+  -CopilotRepoUrl $copilotUrl \
+  -CopilotBranch $copilotBranch \
+  -GovernanceRepoUrl $governanceUrl \
+  -GovernanceBranch $governanceBranch
+EOF
+
+  local release_url_esc
+  local release_branch_esc
+  local copilot_url_esc
+  local copilot_branch_esc
+  local governance_url_esc
+  local governance_branch_esc
+
+  release_url_esc="$(esc_sed_replacement "$release_url")"
+  release_branch_esc="$(esc_sed_replacement "$release_branch")"
+  copilot_url_esc="$(esc_sed_replacement "$copilot_url")"
+  copilot_branch_esc="$(esc_sed_replacement "$copilot_branch")"
+  governance_url_esc="$(esc_sed_replacement "$governance_url")"
+  governance_branch_esc="$(esc_sed_replacement "$governance_branch")"
+
+  sed -i \
+    -e "s|__RELEASE_URL__|$release_url_esc|g" \
+    -e "s|__RELEASE_BRANCH__|$release_branch_esc|g" \
+    -e "s|__COPILOT_URL__|$copilot_url_esc|g" \
+    -e "s|__COPILOT_BRANCH__|$copilot_branch_esc|g" \
+    -e "s|__GOVERNANCE_URL__|$governance_url_esc|g" \
+    -e "s|__GOVERNANCE_BRANCH__|$governance_branch_esc|g" \
+    "$onboard_sh" "$onboard_ps1"
+
+  chmod +x "$onboard_sh"
+}
+
+commit_and_push_control_setup() {
+  local control_dir="$1"
+
+  if $dry_run; then
+    echo "[dry-run] git -C $control_dir add .gitignore scripts/onboard-workspace.sh scripts/onboard-workspace.ps1"
+    echo "[dry-run] git -C $control_dir commit -m Add self-onboarding scripts for new joiners"
+    echo "[dry-run] git -C $control_dir push origin <current-branch>"
+    return
+  fi
+
+  if ! git -C "$control_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "WARN: $control_dir is not a git repo; skipping commit/push of onboarding scripts."
+    return
+  fi
+
+  git -C "$control_dir" add .gitignore scripts/onboard-workspace.sh scripts/onboard-workspace.ps1
+
+  if git -C "$control_dir" diff --cached --quiet; then
+    echo "No control setup file changes to commit."
+    return
+  fi
+
+  git -C "$control_dir" commit -m "Add self-onboarding scripts for new joiners"
+
+  if git -C "$control_dir" remote get-url origin >/dev/null 2>&1; then
+    local current_branch
+    current_branch="$(git -C "$control_dir" symbolic-ref --short HEAD 2>/dev/null || true)"
+    if [[ -z "$current_branch" ]]; then
+      echo "ERROR: Unable to determine current control repo branch for push." >&2
+      exit 1
+    fi
+    git -C "$control_dir" push origin "$current_branch"
+  else
+    echo "WARN: Control repo has no origin remote; skipping push."
+  fi
+}
+
 branch_of() {
   git -C "$1" symbolic-ref --short HEAD 2>/dev/null || echo "detached"
 }
@@ -327,6 +497,8 @@ ensure_repo_checkout "governance" "$governance_dir" "$governance_url" "$governan
 
 ensure_control_gitignore "$control_dir"
 write_state_file "$control_dir" "$release_dir" "$copilot_dir" "$governance_dir"
+write_self_onboarding_scripts "$control_dir"
+commit_and_push_control_setup "$control_dir"
 
 if ! $dry_run; then
   if [[ "$(branch_of "$release_dir")" != "$release_branch" ]]; then

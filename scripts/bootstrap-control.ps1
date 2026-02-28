@@ -126,6 +126,162 @@ function Ensure-ControlGitIgnore {
   }
 }
 
+function Write-SelfOnboardingScripts {
+  param([string]$ControlRepo)
+
+  $scriptsDir = Join-Path $ControlRepo 'scripts'
+  $onboardSh = Join-Path $scriptsDir 'onboard-workspace.sh'
+  $onboardPs1 = Join-Path $scriptsDir 'onboard-workspace.ps1'
+
+  if ($DryRun) {
+    Write-Host "[dry-run] write $onboardSh"
+    Write-Host "[dry-run] write $onboardPs1"
+    return
+  }
+
+  New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+
+  $shTemplate = @'
+#!/usr/bin/env bash
+set -euo pipefail
+
+control_dir="$(cd "$(dirname "$0")/.." && pwd)"
+setup_repo_url="https://github.com/crisweber2600/bmad.lens.setup.git"
+setup_branch="main"
+setup_dir="${TMPDIR:-/tmp}/bmad.lens.setup"
+
+release_url_default="__RELEASE_URL__"
+release_branch_default="__RELEASE_BRANCH__"
+copilot_url_default="__COPILOT_URL__"
+copilot_branch_default="__COPILOT_BRANCH__"
+governance_url_default="__GOVERNANCE_URL__"
+governance_branch_default="__GOVERNANCE_BRANCH__"
+
+if [[ -d "$setup_dir/.git" ]]; then
+  git -C "$setup_dir" remote set-url origin "$setup_repo_url"
+  git -C "$setup_dir" fetch --prune origin
+  if git -C "$setup_dir" ls-remote --exit-code --heads origin "$setup_branch" >/dev/null 2>&1; then
+    git -C "$setup_dir" checkout -B "$setup_branch" "origin/$setup_branch"
+    git -C "$setup_dir" pull --ff-only origin "$setup_branch"
+  fi
+else
+  rm -rf "$setup_dir"
+  git clone "$setup_repo_url" "$setup_dir"
+  if git -C "$setup_dir" ls-remote --exit-code --heads origin "$setup_branch" >/dev/null 2>&1; then
+    git -C "$setup_dir" checkout -B "$setup_branch" "origin/$setup_branch"
+  fi
+fi
+
+bash "$setup_dir/scripts/bootstrap-control.sh" \
+  --control "$control_dir" \
+  --release-url "$release_url_default" \
+  --release-branch "$release_branch_default" \
+  --copilot-url "$copilot_url_default" \
+  --copilot-branch "$copilot_branch_default" \
+  --governance-url "$governance_url_default" \
+  --governance-branch "$governance_branch_default" \
+  "$@"
+'@
+
+  $psTemplate = @'
+param(
+  [string]$SetupRepoUrl = "https://github.com/crisweber2600/bmad.lens.setup.git",
+  [string]$SetupBranch = "main"
+)
+
+$ErrorActionPreference = 'Stop'
+
+$controlRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$setupDir = Join-Path ([System.IO.Path]::GetTempPath()) "bmad.lens.setup"
+
+$releaseUrl = "__RELEASE_URL__"
+$releaseBranch = "__RELEASE_BRANCH__"
+$copilotUrl = "__COPILOT_URL__"
+$copilotBranch = "__COPILOT_BRANCH__"
+$governanceUrl = "__GOVERNANCE_URL__"
+$governanceBranch = "__GOVERNANCE_BRANCH__"
+
+if (Test-Path (Join-Path $setupDir '.git')) {
+  git -C $setupDir remote set-url origin $SetupRepoUrl | Out-Null
+  git -C $setupDir fetch --prune origin | Out-Null
+  try {
+    git -C $setupDir ls-remote --exit-code --heads origin $SetupBranch | Out-Null
+    git -C $setupDir checkout -B $SetupBranch "origin/$SetupBranch" | Out-Null
+    git -C $setupDir pull --ff-only origin $SetupBranch | Out-Null
+  } catch {}
+}
+else {
+  if (Test-Path $setupDir) { Remove-Item $setupDir -Recurse -Force }
+  git clone $SetupRepoUrl $setupDir | Out-Null
+  try {
+    git -C $setupDir ls-remote --exit-code --heads origin $SetupBranch | Out-Null
+    git -C $setupDir checkout -B $SetupBranch "origin/$SetupBranch" | Out-Null
+  } catch {}
+}
+
+$bootstrapScript = Join-Path $setupDir 'scripts/bootstrap-control.ps1'
+& $bootstrapScript \
+  -ControlLocation $controlRepo \
+  -ReleaseRepoUrl $releaseUrl \
+  -ReleaseBranch $releaseBranch \
+  -CopilotRepoUrl $copilotUrl \
+  -CopilotBranch $copilotBranch \
+  -GovernanceRepoUrl $governanceUrl \
+  -GovernanceBranch $governanceBranch
+'@
+
+  $shContent = $shTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch)
+  $psContent = $psTemplate.Replace('__RELEASE_URL__', $ReleaseRepoUrl).Replace('__RELEASE_BRANCH__', $ReleaseBranch).Replace('__COPILOT_URL__', $CopilotRepoUrl).Replace('__COPILOT_BRANCH__', $CopilotBranch).Replace('__GOVERNANCE_URL__', $GovernanceRepoUrl).Replace('__GOVERNANCE_BRANCH__', $GovernanceBranch)
+
+  Set-Content -Path $onboardSh -Value $shContent -NoNewline
+  Set-Content -Path $onboardPs1 -Value $psContent -NoNewline
+}
+
+function Commit-ControlSetup {
+  param([string]$ControlRepo)
+
+  if ($DryRun) {
+    Write-Host "[dry-run] git -C $ControlRepo add .gitignore scripts/onboard-workspace.sh scripts/onboard-workspace.ps1"
+    Write-Host "[dry-run] git -C $ControlRepo commit -m Add self-onboarding scripts for new joiners"
+    Write-Host "[dry-run] git -C $ControlRepo push origin <current-branch>"
+    return
+  }
+
+  git -C $ControlRepo rev-parse --is-inside-work-tree | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARN: $ControlRepo is not a git repo; skipping commit/push of onboarding scripts."
+    return
+  }
+
+  git -C $ControlRepo add .gitignore scripts/onboard-workspace.sh scripts/onboard-workspace.ps1 | Out-Null
+  git -C $ControlRepo diff --cached --quiet
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host 'No control setup file changes to commit.'
+    return
+  }
+
+  git -C $ControlRepo commit -m 'Add self-onboarding scripts for new joiners' | Out-Null
+
+  $hasOrigin = $true
+  try {
+    git -C $ControlRepo remote get-url origin | Out-Null
+  } catch {
+    $hasOrigin = $false
+  }
+
+  if (-not $hasOrigin) {
+    Write-Host 'WARN: Control repo has no origin remote; skipping push.'
+    return
+  }
+
+  $currentBranch = (Get-RepoBranch $ControlRepo)
+  if ([string]::IsNullOrWhiteSpace($currentBranch) -or $currentBranch -eq 'detached') {
+    throw 'Unable to determine current control repo branch for push.'
+  }
+
+  git -C $ControlRepo push origin $currentBranch | Out-Null
+}
+
 function Write-StateFile {
   param(
     [string]$ControlRepo,
@@ -263,6 +419,8 @@ Ensure-RepoCheckout -Label 'governance' -Path $governanceDir -RepoUrl $Governanc
 
 Ensure-ControlGitIgnore -ControlRepo $controlRepo
 Write-StateFile -ControlRepo $controlRepo -ReleasePath $releaseDir -CopilotPath $copilotDir -GovernancePath $governanceDir
+Write-SelfOnboardingScripts -ControlRepo $controlRepo
+Commit-ControlSetup -ControlRepo $controlRepo
 
 if (-not $DryRun) {
   if ((Get-RepoBranch $releaseDir) -ne $ReleaseBranch) {
