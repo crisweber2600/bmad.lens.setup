@@ -125,7 +125,6 @@ ensure_control_gitignore() {
   local required=(
     "_bmad-output/lens-work/external-repos.yaml"
     "bmad.lens.release"
-    ".gihub"
     ".github"
     "TargetProjects/lens/lens-governance"
   )
@@ -149,6 +148,14 @@ ensure_control_gitignore() {
       printf '%s\n' "$entry" >> "$ignore_file"
     fi
   done
+
+  if [[ -f "$ignore_file" ]] && grep -Fxq ".gihub" "$ignore_file"; then
+    if $dry_run; then
+      echo "[dry-run] remove legacy .gitignore entry: .gihub"
+    else
+      sed -i '/^\.gihub$/d' "$ignore_file"
+    fi
+  fi
 }
 
 esc_sed_replacement() {
@@ -482,9 +489,11 @@ if [[ -n "$control_branch" ]]; then
   fi
 fi
 
-legacy_dir="$control_dir/.github"
-copilot_dir="$control_dir/.gihub"
-if [[ "$legacy_dir" != "$copilot_dir" && -e "$legacy_dir" ]]; then
+legacy_dir="$control_dir/.gihub"
+copilot_dir="$control_dir/.github"
+if [[ -d "$legacy_dir/.git" && ! -e "$copilot_dir" ]]; then
+  run mv "$legacy_dir" "$copilot_dir"
+elif [[ "$legacy_dir" != "$copilot_dir" && -e "$legacy_dir" ]]; then
   run rm -rf "$legacy_dir"
 fi
 

@@ -3,7 +3,7 @@
 Bootstrap utilities for onboarding a BMAD LENS control repository with the external repos:
 
 - `bmad.lens.release`
-- `bmad.lens.copilot` (cloned into `.gihub`)
+- `bmad.lens.copilot` (cloned into `.github`)
 - `bmad.lens.governance` (cloned into `TargetProjects/lens/lens-governance`)
 
 The bootstrap scripts support providing the control repo as either:
@@ -22,7 +22,7 @@ Both scripts:
 - clone or update the external repos,
 - verify expected branches exist remotely and check them out,
 - normalize remotes when folders already exist,
-- remove legacy `controlRepo/.github` when present,
+- migrate legacy `controlRepo/.gihub` to `controlRepo/.github` when present,
 - ensure control `.gitignore` includes external-repo exclusions,
 - write `_bmad-output/lens-work/external-repos.yaml` state,
 - generate `scripts/onboard-workspace.sh` and `scripts/onboard-workspace.ps1` inside the target control repo,

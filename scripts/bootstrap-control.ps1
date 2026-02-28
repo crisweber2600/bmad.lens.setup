@@ -98,7 +98,6 @@ function Ensure-ControlGitIgnore {
   $required = @(
     '_bmad-output/lens-work/external-repos.yaml',
     'bmad.lens.release',
-    '.gihub',
     '.github',
     'TargetProjects/lens/lens-governance'
   )
@@ -122,6 +121,15 @@ function Ensure-ControlGitIgnore {
     } else {
       Add-Content -Path $ignoreFile -Value $entry
       $existing += $entry
+    }
+  }
+
+  if ($existing -contains '.gihub') {
+    if ($DryRun) {
+      Write-Host '[dry-run] remove legacy .gitignore entry: .gihub'
+    } else {
+      $filtered = $existing | Where-Object { $_ -ne '.gihub' }
+      Set-Content -Path $ignoreFile -Value ($filtered -join "`n") -NoNewline
     }
   }
 }
@@ -404,9 +412,12 @@ if ($ControlBranch) {
   }
 }
 
-$legacyDir = Join-Path $controlRepo '.github'
-$copilotDir = Join-Path $controlRepo '.gihub'
-if ((Test-Path $legacyDir) -and ($legacyDir -ne $copilotDir)) {
+$legacyDir = Join-Path $controlRepo '.gihub'
+$copilotDir = Join-Path $controlRepo '.github'
+if ((Test-Path (Join-Path $legacyDir '.git')) -and -not (Test-Path $copilotDir)) {
+  Invoke-Step -Preview "move $legacyDir to $copilotDir" -Script { Move-Item -Path $legacyDir -Destination $copilotDir }
+}
+elseif ((Test-Path $legacyDir) -and ($legacyDir -ne $copilotDir)) {
   Invoke-Step -Preview "remove $legacyDir" -Script { Remove-Item $legacyDir -Recurse -Force }
 }
 
