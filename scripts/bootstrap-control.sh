@@ -2,7 +2,7 @@
 set -euo pipefail
 
 release_url_default="https://github.com/crisweber2600/bmad.lens.release.git"
-release_branch_default="5.0"
+release_branch_default="release/2.0.0"
 copilot_url_default="https://github.com/crisweber2600/bmad.lens.copilot.git"
 copilot_branch_default="main"
 governance_url_default="https://github.com/crisweber2600/bmad.lens.governance.git"
@@ -31,7 +31,7 @@ Options:
   --control-branch <name>        Optional control repo branch to enforce.
 
   --release-url <url>            Release repo URL (default: crisweber2600/bmad.lens.release).
-  --release-branch <name>        Release branch (default: 5.0).
+  --release-branch <name>        Release branch (default: release/2.0.0).
   --copilot-url <url>            Copilot repo URL (default: crisweber2600/bmad.lens.copilot).
   --copilot-branch <name>        Copilot branch (default: main).
   --governance-url <url>         Governance repo URL (default: crisweber2600/bmad.lens.governance).
