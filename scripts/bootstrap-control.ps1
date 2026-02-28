@@ -276,8 +276,13 @@ if (-not $DryRun) {
   }
 }
 
+$controlBranchDisplay = 'current'
+if (-not [string]::IsNullOrWhiteSpace($ControlBranch)) {
+  $controlBranchDisplay = $ControlBranch
+}
+
 Write-Host 'Onboarding complete'
-Write-Host "- control:    $controlRepo ($([string]::IsNullOrWhiteSpace($ControlBranch) ? 'current' : $ControlBranch))"
+Write-Host "- control:    $controlRepo ($controlBranchDisplay)"
 Write-Host "- release:    $releaseDir @ $(Get-RepoBranch $releaseDir)"
 Write-Host "- copilot:    $copilotDir @ $(Get-RepoBranch $copilotDir)"
 Write-Host "- governance: $governanceDir @ $(Get-RepoBranch $governanceDir)"
