@@ -248,13 +248,13 @@ else {
 }
 
 $bootstrapScript = Join-Path $setupDir 'scripts/bootstrap-control.ps1'
-& $bootstrapScript \
-  -ControlLocation $controlRepo \
-  -ReleaseRepoUrl $releaseUrl \
-  -ReleaseBranch $releaseBranch \
-  -CopilotRepoUrl $copilotUrl \
-  -CopilotBranch $copilotBranch \
-  -GovernanceRepoUrl $governanceUrl \
+& $bootstrapScript `
+  -ControlLocation $controlRepo `
+  -ReleaseRepoUrl $releaseUrl `
+  -ReleaseBranch $releaseBranch `
+  -CopilotRepoUrl $copilotUrl `
+  -CopilotBranch $copilotBranch `
+  -GovernanceRepoUrl $governanceUrl `
   -GovernanceBranch $governanceBranch
 EOF
 
