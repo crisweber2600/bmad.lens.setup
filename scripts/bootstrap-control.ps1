@@ -12,7 +12,7 @@ param(
   [string]$ReleaseRepoUrl = "https://github.com/crisweber2600/bmad.lens.release.git",
 
   [Parameter(Mandatory = $false)]
-  [string]$ReleaseBranch = "5.0",
+  [string]$ReleaseBranch = "release/2.0.0",
 
   [Parameter(Mandatory = $false)]
   [string]$CopilotRepoUrl = "https://github.com/crisweber2600/bmad.lens.copilot.git",
