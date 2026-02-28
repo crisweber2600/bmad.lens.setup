@@ -1,0 +1,10 @@
+# Local test/scratch files
+.tmp/
+.temp/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# Shell/PowerShell logs
+*.log
